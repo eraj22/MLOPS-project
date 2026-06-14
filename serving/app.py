@@ -165,6 +165,7 @@ def debug_trigger(condition: str) -> dict:
         DISTRIBUTION_DRIFT_DETECTED,
         RESPONSE_DELAY_SECONDS,
         MODEL_ACCURACY,
+        RETRAIN_COUNT_TOTAL,
     )
 
     actions = {
@@ -176,6 +177,7 @@ def debug_trigger(condition: str) -> dict:
         "latency": lambda: [RESPONSE_DELAY_SECONDS.observe(1.5) for _ in range(20)],
         "low_accuracy": lambda: MODEL_ACCURACY.set(0.5),
         "restore_accuracy": lambda: MODEL_ACCURACY.set(0.95),
+        "retrain": lambda: RETRAIN_COUNT_TOTAL.inc(),
     }
 
     if condition not in actions:

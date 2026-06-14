@@ -1,7 +1,7 @@
 {
-  "version": 4,
+  "version": 7,
   "accuracy": 0.96,
-  "model_path": "model/model_v4.pkl",
+  "model_path": "model/model_v7.pkl",
   "feature_columns": [
     "feature_1",
     "feature_2",
