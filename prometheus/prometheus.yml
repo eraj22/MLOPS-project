@@ -14,21 +14,20 @@ rule_files:
 scrape_configs:
   - job_name: "mlops_inference_ec2"
     metrics_path: /metrics
+    honor_timestamps: false
     static_configs:
-      # Replace with your AWS EC2 public IP and the port your service listens on.
-      - targets: ["YOUR_EC2_PUBLIC_IP:8000"]
+      - targets: ["16.170.148.255:8000"]
         labels:
           service: "mlops-inference"
           environment: "production"
-
   - job_name: "mlops_inference_local"
     metrics_path: /metrics
+    honor_timestamps: false
     static_configs:
       - targets: ["inference:8000"]
         labels:
           service: "mlops-inference"
           environment: "local"
-
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]

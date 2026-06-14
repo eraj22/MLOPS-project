@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Dict
 
 from contextlib import asynccontextmanager
+import threading
+from ingestion.ingestion import run_loop   # add this import
 
 import joblib
 import pandas as pd
@@ -50,8 +52,10 @@ CURRENT_VERSION_PATH = BASE_DIR / "model" / "current_version.json"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_model()
+    # Start ingestion loop in background thread
+    t = threading.Thread(target=run_loop, daemon=True)
+    t.start()
     yield
-
 
 app = FastAPI(title="MLOps Inference API", lifespan=lifespan)
 
