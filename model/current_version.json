@@ -1,0 +1,11 @@
+{
+  "version": 4,
+  "accuracy": 0.96,
+  "model_path": "model/model_v4.pkl",
+  "feature_columns": [
+    "feature_1",
+    "feature_2",
+    "feature_3"
+  ],
+  "target_column": "label"
+}

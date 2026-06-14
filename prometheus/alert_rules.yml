@@ -1,0 +1,65 @@
+groups:
+  - name: mlops_alerts
+    rules:
+      # 1. DataLakeUnavailable
+      - alert: DataLakeUnavailable
+        expr: increase(datalake_unavailable[1m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data source returned 503"
+          description: "Data source returned 503. Check API availability."
+
+      # 2. FeatureAdded
+      - alert: FeatureAdded
+        expr: increase(feature_added[1m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "New feature detected in schema"
+          description: "New feature detected in schema. Retraining may be required."
+
+      # 3. FeatureRemoved
+      - alert: FeatureRemoved
+        expr: increase(feature_removed[1m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature dropped from schema"
+          description: "Feature dropped from schema. Verify pipeline compatibility."
+
+      # 4. DistributionDrift
+      - alert: DistributionDrift
+        expr: distribution_drift_detected == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data distribution drift detected"
+          description: "Data distribution drift detected. Model may be stale."
+
+      # 5. FeatureDriftDetected
+      - alert: FeatureDriftDetected
+        expr: distribution_drift_detected > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature-level drift flagged"
+          description: "Feature-level drift flagged. Investigate upstream data."
+
+      # 6. HighResponseLatency
+      - alert: HighResponseLatency
+        expr: histogram_quantile(0.95, sum(rate(response_delay_seconds_bucket[5m])) by (le)) > 1.0
+        labels:
+          severity: critical
+        annotations:
+          summary: "P95 response latency exceeded 1 second"
+          description: "P95 response latency exceeded 1 second."
+
+      # 7. LowModelAccuracy
+      - alert: LowModelAccuracy
+        expr: model_accuracy < 0.8
+        labels:
+          severity: critical
+        annotations:
+          summary: "Model accuracy dropped below threshold"
+          description: "Model accuracy dropped below threshold. Auto-retraining triggered."

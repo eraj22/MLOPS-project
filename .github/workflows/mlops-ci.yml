@@ -1,0 +1,115 @@
+name: MLOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1: Lint and Test
+  # -----------------------------------------------------------------------
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint with flake8
+        run: |
+          flake8 ingestion model serving exporter tests
+
+      - name: Train initial model (required for /predict tests)
+        run: |
+          python model/train.py
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v
+
+      # Bonus B3: Extended CI/CD - fail build if accuracy < 0.80
+      - name: Model accuracy gate (bonus)
+        run: |
+          python - <<'EOF'
+          import json, sys
+          with open("model/current_version.json") as f:
+              meta = json.load(f)
+          accuracy = meta["accuracy"]
+          print(f"Model accuracy: {accuracy}")
+          if accuracy < 0.80:
+              print("Accuracy below threshold (0.80) — failing build.")
+              sys.exit(1)
+          EOF
+
+  # -----------------------------------------------------------------------
+  # Job 2: Build and Push Docker Image
+  # -----------------------------------------------------------------------
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/mlops-inference:latest
+            ${{ secrets.DOCKER_USERNAME }}/mlops-inference:${{ github.sha }}
+
+  # -----------------------------------------------------------------------
+  # Job 3: Deploy to AWS EC2
+  # -----------------------------------------------------------------------
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker pull ${{ secrets.DOCKER_USERNAME }}/mlops-inference:latest
+            docker stop mlops-inference || true
+            docker rm mlops-inference || true
+            docker run -d \
+              --name mlops-inference \
+              --restart unless-stopped \
+              -p 80:8000 \
+              -p 8000:8000 \
+              -e SLACK_WEBHOOK_URL="${{ secrets.SLACK_WEBHOOK_URL }}" \
+              ${{ secrets.DOCKER_USERNAME }}/mlops-inference:latest
+            sleep 5
+            curl -f http://localhost:8000/health
+
+      - name: Verify deployment from runner
+        run: |
+          curl -f http://${{ secrets.EC2_HOST }}:8000/health

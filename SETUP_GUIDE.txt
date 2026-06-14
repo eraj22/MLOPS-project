@@ -1,0 +1,531 @@
+================================================================================
+ MLOps PROJECT - STEP BY STEP RUN GUIDE (Ubuntu WSL)
+ GitHub username: eraj22
+================================================================================
+
+This guide assumes:
+  - You are in Ubuntu WSL terminal
+  - The unzipped project folder is called: mlops-project
+  - Your GitHub username is: eraj22
+  - You will create a GitHub repo named: mlops-project
+  - You will create a Docker Hub repo named: eraj22/mlops-inference
+
+Replace anything in <ANGLE_BRACKETS> with your real values.
+
+
+================================================================================
+STEP 0: PREREQUISITES (run once)
+================================================================================
+
+1) Update system and install basic tools:
+
+    sudo apt update && sudo apt upgrade -y
+    sudo apt install -y python3 python3-venv python3-pip git curl unzip
+
+2) Install Docker (needed for building/running containers, and for the
+   observability stack with docker-compose):
+
+    sudo apt install -y ca-certificates curl gnupg
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt update
+    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+3) Allow running docker without sudo (log out/in or restart WSL after this):
+
+    sudo usermod -aG docker $USER
+    newgrp docker
+
+4) Verify installs:
+
+    python3 --version
+    docker --version
+    docker compose version
+
+
+================================================================================
+STEP 1: UNZIP THE PROJECT AND ENTER THE FOLDER
+================================================================================
+
+    cd ~
+    unzip mlops-project.zip
+    cd mlops-project
+
+
+================================================================================
+STEP 2: PYTHON VIRTUAL ENVIRONMENT + DEPENDENCIES
+================================================================================
+
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+
+
+================================================================================
+STEP 3: CONFIGURE ENVIRONMENT VARIABLES
+================================================================================
+
+1) Copy the example env file:
+
+    cp .env.example .env
+
+2) Edit it:
+
+    nano .env
+
+   At minimum set:
+     SLACK_WEBHOOK_URL=<your real Slack webhook URL>   (see Step 9 below)
+
+   Leave RECORDS_API_URL as-is (it is the only allowed endpoint):
+     RECORDS_API_URL=http://149.40.228.124:6500/records
+
+3) Load the env vars into your current shell session:
+
+    export $(grep -v '^#' .env | xargs)
+
+
+================================================================================
+STEP 4: RUN DATA INGESTION (Part 1)
+================================================================================
+
+Run once (single fetch + schema/drift check):
+
+    python ingestion/ingestion.py --once
+
+Check results:
+
+    cat data/records.csv | head
+    cat data/last_schema.json
+
+If the API returns 503, you'll see it logged and the datalake_unavailable
+counter increments + a Slack alert fires (if SLACK_WEBHOOK_URL is set).
+
+(Optional) Run continuously in the background, polling every
+POLL_INTERVAL_SECONDS:
+
+    python ingestion/ingestion.py &
+
+
+================================================================================
+STEP 5: TRAIN THE MODEL (Part 2)
+================================================================================
+
+    python model/train.py
+
+This creates:
+    model/model_v1.pkl
+    model/current_version.json
+
+If data/records.csv doesn't have enough rows or no "label" column yet, it
+automatically falls back to a synthetic dataset so the pipeline still runs.
+
+NOTE: If the live API's records use a different target column name than
+"label", set TARGET_COLUMN in .env before training, e.g.:
+    echo "TARGET_COLUMN=your_target_column_name" >> .env
+    export TARGET_COLUMN=your_target_column_name
+
+
+================================================================================
+STEP 6: RUN THE INFERENCE API LOCALLY (Part 3 - local check before AWS)
+================================================================================
+
+1) Start the server:
+
+    uvicorn serving.app:app --host 0.0.0.0 --port 8000 &
+
+2) Test endpoints:
+
+    curl localhost:8000/health
+
+    curl -X POST localhost:8000/predict \
+      -H "Content-Type: application/json" \
+      -d '{"features": {"feature_1": 0.5, "feature_2": 5.0, "feature_3": 3.0}}'
+
+    curl localhost:8000/metrics | head -30
+
+3) Stop it when done:
+
+    pkill -f uvicorn
+
+
+================================================================================
+STEP 7: RUN AUTO-RETRAINING CHECK (Part 2)
+================================================================================
+
+    python model/retrain_trigger.py            # checks conditions, retrains if needed
+    python model/retrain_trigger.py --force     # force retrain regardless of conditions
+
+
+================================================================================
+STEP 8: RUN LINT + UNIT TESTS (Part 7 requirements)
+================================================================================
+
+    flake8 ingestion model serving exporter tests
+    pytest tests/ -v
+
+All 6 tests should pass:
+    test_schema.py::test_schema_change_detection
+    test_drift.py::test_drift_detected_on_shifted_distribution
+    test_drift.py::test_no_drift_on_similar_distribution
+    test_predict.py::test_health_endpoint
+    test_predict.py::test_predict_endpoint_returns_expected_structure
+    test_predict.py::test_predict_endpoint_missing_feature_returns_400
+
+
+================================================================================
+STEP 9: SET UP SLACK INCOMING WEBHOOK (Part 6)
+================================================================================
+
+1) Go to: https://api.slack.com/apps
+2) Click "Create New App" -> "From scratch"
+3) Name it (e.g. "MLOps Alerts"), pick your workspace
+4) Left sidebar -> "Incoming Webhooks" -> toggle ON
+5) Click "Add New Webhook to Workspace"
+6) Choose/create channel: #mlops-alerts
+7) Copy the Webhook URL (looks like:
+   https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXX)
+8) Put it in .env:
+
+    nano .env
+    # set SLACK_WEBHOOK_URL=<the copied URL>
+
+    export $(grep -v '^#' .env | xargs)
+
+
+================================================================================
+STEP 10: PUSH PROJECT TO GITHUB (eraj22)
+================================================================================
+
+1) Create a new repo on GitHub (via browser):
+   - Go to https://github.com/new
+   - Repository name: mlops-project
+   - Visibility: Public
+   - Do NOT initialize with README (we already have one)
+   - Click "Create repository"
+
+2) From your project folder, initialize git and push:
+
+    cd ~/mlops-project
+    git init
+    git add .
+    git status               # double-check .env is NOT listed (it's gitignored)
+    git commit -m "Initial MLOps pipeline"
+    git branch -M main
+    git remote add origin https://github.com/eraj22/mlops-project.git
+    git push -u origin main
+
+   If prompted for credentials, use a GitHub Personal Access Token (PAT)
+   instead of your password:
+   GitHub -> Settings -> Developer settings -> Personal access tokens ->
+   Generate new token (classic) -> scopes: repo
+
+
+================================================================================
+STEP 11: CREATE DOCKER HUB ACCOUNT + REPO
+================================================================================
+
+1) Sign up / log in at https://hub.docker.com (use username eraj22 or your
+   chosen Docker Hub username)
+
+2) Create an access token (used instead of password):
+   Docker Hub -> Account Settings -> Security -> New Access Token
+   Copy the token value (you'll need it for GitHub secrets and local login)
+
+3) (Optional) Log in locally to test building/pushing:
+
+    docker login -u eraj22
+    # paste your access token as the password
+
+
+================================================================================
+STEP 12: BUILD & TEST THE DOCKER IMAGE LOCALLY
+================================================================================
+
+    cd ~/mlops-project
+
+    docker build -t eraj22/mlops-inference:latest .
+
+    docker run -d --name mlops-inference-test \
+      -p 8000:8000 \
+      -e SLACK_WEBHOOK_URL="$SLACK_WEBHOOK_URL" \
+      eraj22/mlops-inference:latest
+
+    sleep 5
+    curl localhost:8000/health
+    curl localhost:8000/metrics | head -20
+
+    docker stop mlops-inference-test
+    docker rm mlops-inference-test
+
+
+================================================================================
+STEP 13: LAUNCH AWS EC2 INSTANCE (Part 3)
+================================================================================
+
+1) AWS Console -> EC2 -> Launch Instance
+2) Name: mlops-inference
+3) AMI: Ubuntu Server 22.04 LTS
+4) Instance type: t2.micro (free tier)
+5) Key pair: create new -> name it "mlops-key" -> download "mlops-key.pem"
+   (move it into ~/mlops-project/ or note its path)
+6) Security Group - add inbound rules:
+     SSH    TCP  22    Source: My IP
+     HTTP   TCP  80    Source: 0.0.0.0/0
+     Custom TCP 8000   Source: 0.0.0.0/0
+     Custom TCP 9090   Source: 0.0.0.0/0   (Prometheus, if hosted here too)
+     Custom TCP 3000   Source: 0.0.0.0/0   (Grafana, if hosted here too)
+     Custom TCP 9093   Source: 0.0.0.0/0   (Alertmanager, if hosted here too)
+7) Launch instance
+8) Copy the "Public IPv4 address" -> this is your EC2_HOST
+
+9) Fix key permissions (WSL):
+
+    chmod 400 ~/mlops-project/mlops-key.pem
+
+
+================================================================================
+STEP 14: INSTALL DOCKER ON THE EC2 INSTANCE
+================================================================================
+
+    ssh -i ~/mlops-project/mlops-key.pem ubuntu@<EC2_PUBLIC_IP>
+
+Once connected, run on the EC2 instance:
+
+    sudo apt update
+    sudo apt install -y docker.io
+    sudo usermod -aG docker ubuntu
+    exit
+
+Reconnect so the docker group applies:
+
+    ssh -i ~/mlops-project/mlops-key.pem ubuntu@<EC2_PUBLIC_IP>
+    docker --version
+    exit
+
+
+================================================================================
+STEP 15: BUILD, PUSH, AND DEPLOY TO EC2 (Part 3 deploy script)
+================================================================================
+
+Back on your WSL machine, from ~/mlops-project:
+
+1) Export required variables:
+
+    export DOCKER_USERNAME=eraj22
+    export DOCKER_PASSWORD=<your_dockerhub_access_token>
+    export DOCKER_IMAGE_NAME=eraj22/mlops-inference
+    export IMAGE_TAG=latest
+
+2) Build and push the image to Docker Hub:
+
+    chmod +x deploy/deploy.sh
+    ./deploy/deploy.sh build-and-push
+
+3) Now configure remote-deploy variables:
+
+    export EC2_HOST=<EC2_PUBLIC_IP>
+    export EC2_USER=ubuntu
+    export EC2_SSH_KEY_PATH=~/mlops-project/mlops-key.pem
+    export SLACK_WEBHOOK_URL=<your_slack_webhook_url>
+
+4) Deploy to EC2 (pulls image, runs container):
+
+    ./deploy/deploy.sh remote-deploy
+
+   (Or do both build+push and deploy in one go: ./deploy/deploy.sh all)
+
+
+================================================================================
+STEP 16: VERIFY THE LIVE EC2 DEPLOYMENT (Part 3 screenshots)
+================================================================================
+
+    curl http://<EC2_PUBLIC_IP>:8000/health
+    curl http://<EC2_PUBLIC_IP>:8000/metrics
+    curl -X POST http://<EC2_PUBLIC_IP>:8000/predict \
+      -H "Content-Type: application/json" \
+      -d '{"features": {"feature_1": 0.5, "feature_2": 5.0, "feature_3": 3.0}}'
+
+Take screenshots of these for your submission (save into screenshots/).
+
+Update README.md with the EC2 public IP:
+    nano README.md
+    (replace <FILL_IN_YOUR_EC2_IP> with the actual IP)
+
+
+================================================================================
+STEP 17: POINT PROMETHEUS AT YOUR EC2 INSTANCE
+================================================================================
+
+    nano prometheus/prometheus.yml
+
+Replace:
+    targets: ["YOUR_EC2_PUBLIC_IP:8000"]
+with:
+    targets: ["<EC2_PUBLIC_IP>:8000"]
+
+Save and exit.
+
+
+================================================================================
+STEP 18: START THE OBSERVABILITY STACK (Part 5) - Prometheus/Grafana/Alertmanager
+================================================================================
+
+Run on your WSL machine (or a separate EC2 host):
+
+    export SLACK_WEBHOOK_URL=<your_slack_webhook_url>
+    docker compose up -d
+
+Check containers are running:
+
+    docker ps
+
+Access:
+    Prometheus    -> http://localhost:9090
+    Grafana       -> http://localhost:3000   (login: admin / admin)
+    Alertmanager  -> http://localhost:9093
+
+Verify Prometheus targets are UP:
+    Open http://localhost:9090/targets in browser
+    (mlops_inference_ec2 should show state = UP)
+
+
+================================================================================
+STEP 19: IMPORT GRAFANA DASHBOARD (Part 5)
+================================================================================
+
+1) Open http://localhost:3000 -> log in (admin / admin), set new password
+2) Left menu -> Connections -> Data sources -> Add data source -> Prometheus
+   URL: http://prometheus:9090  -> Save & Test
+3) Left menu -> Dashboards -> New -> Import
+4) Click "Upload dashboard JSON file"
+5) Select: grafana/dashboards/mlops_dashboard.json
+6) When prompted for the Prometheus data source variable, select the one
+   you just created
+7) Click Import
+
+Take a screenshot of the dashboard with live data for screenshots/.
+
+
+================================================================================
+STEP 20: TRIGGER AND DEMO ALL 7 SLACK ALERTS (Part 6)
+================================================================================
+
+With the EC2 service running and SLACK_WEBHOOK_URL configured, run each of
+these one at a time (wait ~30-60 seconds between each for Prometheus to
+scrape + Alertmanager to fire):
+
+    BASE=http://<EC2_PUBLIC_IP>:8000
+
+    curl -X POST $BASE/debug/trigger/datalake          # Alert 1: DataLakeUnavailable
+    curl -X POST $BASE/debug/trigger/feature_added     # Alert 2: FeatureAdded
+    curl -X POST $BASE/debug/trigger/feature_removed   # Alert 3: FeatureRemoved
+    curl -X POST $BASE/debug/trigger/drift             # Alerts 4 & 5: Drift
+    curl -X POST $BASE/debug/trigger/latency           # Alert 6: HighResponseLatency
+    curl -X POST $BASE/debug/trigger/low_accuracy      # Alert 7: LowModelAccuracy
+
+After each one, check #mlops-alerts in Slack and screenshot the message
+into screenshots/.
+
+Reset state afterward:
+
+    curl -X POST $BASE/debug/trigger/clear_drift
+    curl -X POST $BASE/debug/trigger/restore_accuracy
+
+
+================================================================================
+STEP 21: GITHUB ACTIONS CI/CD SETUP (Part 7)
+================================================================================
+
+1) On GitHub: go to your repo
+   https://github.com/eraj22/mlops-project
+
+2) Settings -> Secrets and variables -> Actions -> "New repository secret"
+   Add each of these:
+
+     DOCKER_USERNAME    = eraj22
+     DOCKER_PASSWORD    = <your dockerhub access token>
+     EC2_SSH_KEY        = <paste full contents of mlops-key.pem>
+     EC2_HOST           = <EC2_PUBLIC_IP>
+     EC2_USER           = ubuntu
+     SLACK_WEBHOOK_URL  = <your slack webhook url>
+
+   To get the .pem contents to paste:
+
+     cat ~/mlops-project/mlops-key.pem
+
+3) Trigger the pipeline by pushing to main:
+
+    cd ~/mlops-project
+    git add .
+    git commit -m "Update config for deployment"
+    git push origin main
+
+4) On GitHub, go to the "Actions" tab and watch the workflow run.
+   All 3 jobs (lint-and-test, build-and-push, deploy) should turn green.
+
+5) Screenshot the green workflow run for screenshots/.
+
+
+================================================================================
+STEP 22: FINAL DOCUMENTATION CLEANUP
+================================================================================
+
+1) Edit README.md:
+    nano README.md
+   - Fill in team member name(s) and roll number(s)
+   - Fill in EC2 public IP
+   - Add your video demo link (Google Drive / YouTube unlisted)
+
+2) Make sure screenshots/ folder contains:
+   - EC2 /health returning 200
+   - Raw /metrics output
+   - Grafana dashboard with live data
+   - All 7 Slack alert messages (one per alert)
+   - GitHub Actions workflow all green
+
+3) Commit and push final changes:
+
+    git add .
+    git commit -m "Final documentation and screenshots"
+    git push origin main
+
+
+================================================================================
+QUICK REFERENCE - FULL RUN ORDER (copy/paste block)
+================================================================================
+
+    cd ~/mlops-project
+    python3 -m venv .venv && source .venv/bin/activate
+    pip install -r requirements.txt
+    cp .env.example .env   # edit SLACK_WEBHOOK_URL etc.
+    export $(grep -v '^#' .env | xargs)
+
+    python ingestion/ingestion.py --once
+    python model/train.py
+    uvicorn serving.app:app --host 0.0.0.0 --port 8000 &
+    curl localhost:8000/health
+
+    pytest tests/ -v
+    flake8 ingestion model serving exporter tests
+
+    export DOCKER_USERNAME=eraj22
+    export DOCKER_PASSWORD=<token>
+    export DOCKER_IMAGE_NAME=eraj22/mlops-inference
+    export EC2_HOST=<EC2_IP>
+    export EC2_USER=ubuntu
+    export EC2_SSH_KEY_PATH=~/mlops-project/mlops-key.pem
+    ./deploy/deploy.sh all
+
+    docker compose up -d
+    # localhost:9090 (Prometheus), localhost:3000 (Grafana), localhost:9093 (Alertmanager)
+
+    git add . && git commit -m "Initial MLOps pipeline" && git push -u origin main
+
+================================================================================
+END OF GUIDE
+================================================================================

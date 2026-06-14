@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+data/*.csv
+data/*.json
+data/*.flag
+data/*.txt
+.pytest_cache/
+.flake8.bak
+*.log
+.env
