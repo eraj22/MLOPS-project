@@ -1,7 +1,7 @@
 # MLOps Project — End-to-End Pipeline with Monitoring, Alerting & CI/CD
 
 **Course:** Machine Learning Operations (MLOps), Spring 2026 — FAST NUCES
-**Team member(s):** _<Your Name(s) Here>_  |  **Roll number(s):** _<Your Roll Number(s) Here>_
+**Team member(s):22i1296 ERAJ ZAMAN 
 
 ## 1. Project Description
 
